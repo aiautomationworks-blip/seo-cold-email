@@ -1,4 +1,6 @@
 name: Daily Cold Email Outreach
+
+  on:
     schedule:
       - cron: '0 9 * * *'
     workflow_dispatch:
