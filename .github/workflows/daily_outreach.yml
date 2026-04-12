@@ -1,10 +1,9 @@
-  name: Daily Cold Email Outreach                                                                                                                                                
-                                                                                                                                                                               
-  on:                                                                                                                                                                            
-    schedule:                                                                                                                                                                    
-      # Runs at 9:00 AM UTC every day (2:30 PM IST)                                                                                                                              
+name: Daily Cold Email Outreach
+
+  on:
+    schedule:
       - cron: '0 9 * * *'
-    workflow_dispatch: # Allow manual triggers
+    workflow_dispatch:
 
   jobs:
     outreach:
@@ -29,7 +28,6 @@
             GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
             GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
           run: |
-            cd cold_email_system
             python automation/daily_run.py --force
 
         - name: Commit updated data
@@ -39,4 +37,3 @@
             git add -A data/
             git diff --staged --quiet || git commit -m "Auto: daily outreach run $(date +%Y-%m-%d)"
             git push
-
