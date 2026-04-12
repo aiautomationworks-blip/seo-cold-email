@@ -397,6 +397,13 @@ def format_template(template_name, variables, followup_num=0):
     body = re.sub(r'\{[a-z_]+\}', '', body)
     subject = re.sub(r'\{[a-z_]+\}', '', subject)
 
+    # Add unsubscribe text if not already present
+    try:
+        from core.compliance import add_unsubscribe_link
+        body = add_unsubscribe_link(body)
+    except ImportError:
+        pass
+
     return subject.strip(), body.strip()
 
 

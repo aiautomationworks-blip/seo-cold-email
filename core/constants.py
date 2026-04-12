@@ -12,9 +12,20 @@ SENT_COLUMNS = [
 ]
 
 LEAD_STATUSES = [
-    "new", "contacted", "followed_up", "replied",
+    "new", "contacted", "followed_up", "replied", "bounced",
     "call_booked", "proposal_sent", "won", "lost", "do_not_contact",
 ]
+
+# Extended sent email columns (backward-compatible)
+SENT_COLUMNS_V2 = SENT_COLUMNS + [
+    "message_id", "campaign_id", "sequence_step", "variant",
+]
+
+# Campaign statuses
+CAMPAIGN_STATUSES = ["draft", "active", "paused", "completed"]
+
+# Pipeline stages for visual pipeline
+PIPELINE_STAGES = ["new", "contacted", "replied", "call_booked", "proposal_sent", "won", "lost"]
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

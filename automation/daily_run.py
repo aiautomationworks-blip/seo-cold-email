@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Daily Automation Script — for GitHub Actions or manual cron.
-Finds new leads, sends emails, sends follow-ups.
+Finds new leads, runs campaign sequences, sends follow-ups, checks replies.
 
 Usage:
     python automation/daily_run.py              - Full daily routine
@@ -54,6 +54,11 @@ def daily_routine(safe_mode=False, leads_only=False):
             "name": settings.get("your_name", ""),
         }]
 
+    # ─── Step 0: Check for replies ───
+    if not leads_only:
+        print(f"\n--- Step 0: Checking for replies ---")
+        _check_replies(settings)
+
     # ─── Step 1: Find new leads ───
     if not safe_mode:
         print(f"\n--- Step 1: Finding new leads ---")
@@ -63,18 +68,90 @@ def daily_routine(safe_mode=False, leads_only=False):
         print("\nLeads-only mode. Skipping email sends.")
         return
 
-    # ─── Step 2: Send follow-ups ───
-    print(f"\n--- Step 2: Sending follow-ups ---")
+    # ─── Step 2: Run campaign sequences ───
+    print(f"\n--- Step 2: Running campaign sequences ---")
+    _run_campaigns(settings)
+
+    # ─── Step 3: Send follow-ups ───
+    print(f"\n--- Step 3: Sending follow-ups ---")
     _send_followups(settings)
 
     if not safe_mode:
-        # ─── Step 3: Send new outreach ───
-        print(f"\n--- Step 3: Sending new outreach ---")
+        # ─── Step 4: Send new outreach ───
+        print(f"\n--- Step 4: Sending new outreach ---")
         _send_new_outreach(settings)
+
+    # ─── Step 5: Send webhook notifications ───
+    _send_notifications(settings)
 
     print(f"\n{'='*60}")
     print(f"DAILY RUN COMPLETE — {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'='*60}\n")
+
+
+def _check_replies(settings):
+    """Check inbox for replies and bounces."""
+    if not settings.get("email_accounts"):
+        print("  No email account configured for reply checking")
+        return
+
+    try:
+        from outreach.inbox_monitor import InboxMonitor
+        for acc in settings["email_accounts"]:
+            monitor = InboxMonitor({
+                "email": acc.get("email", ""),
+                "password": acc.get("password", ""),
+                "imap_server": "imap.gmail.com",
+                "imap_port": 993,
+            })
+            replies, err = monitor.check_replies(since_days=3)
+            bounces, err2 = monitor.check_bounces(since_days=3)
+
+            all_found = replies + bounces
+            if all_found:
+                new_replies, bounce_count = monitor.process_replies(all_found)
+                print(f"  {acc['email']}: {new_replies} replies, {bounce_count} bounces")
+            else:
+                print(f"  {acc['email']}: No new replies")
+
+            monitor.disconnect()
+
+            # Check bounce rates for active campaigns
+            from outreach.inbox_monitor import check_campaign_bounce_rate
+            from core.campaigns import CampaignManager
+            for campaign in CampaignManager.list_campaigns():
+                if campaign.status == "active":
+                    should_pause, rate = check_campaign_bounce_rate(campaign.id)
+                    if should_pause:
+                        CampaignManager.pause_campaign(campaign.id)
+                        print(f"  AUTO-PAUSED campaign '{campaign.name}' (bounce rate {rate:.1f}%)")
+
+    except Exception as e:
+        print(f"  Reply check error: {e}")
+
+
+def _run_campaigns(settings):
+    """Execute due sends for all active campaigns."""
+    try:
+        from core.campaigns import CampaignManager
+        from outreach.sequences import SequenceExecutor
+
+        executor = SequenceExecutor(settings)
+        campaigns = CampaignManager.list_campaigns()
+
+        for campaign in campaigns:
+            if campaign.status != "active":
+                continue
+            sent, errors = executor.execute_due_sends(campaign.id)
+            print(f"  Campaign '{campaign.name}': {sent} emails sent")
+            for err in errors[:3]:
+                print(f"    Error: {err}")
+
+            if sent > 0:
+                time.sleep(random.uniform(5, 15))
+
+    except Exception as e:
+        print(f"  Campaign execution error: {e}")
 
 
 def _find_new_leads(settings):
@@ -163,14 +240,28 @@ def _send_followups(settings):
     sent_count = 0
 
     for to_email in sent_df["to_email"].unique():
+        # Check compliance
+        try:
+            from core.compliance import check_can_send
+            can_send, reason = check_can_send(to_email)
+            if not can_send:
+                continue
+        except ImportError:
+            pass
+
         if len(leads_df) > 0:
             lead_row = leads_df[leads_df["email"] == to_email]
             if len(lead_row) > 0:
                 status = str(lead_row.iloc[0].get("status", ""))
-                if status in ["replied", "won", "lost", "do_not_contact", "call_booked"]:
+                if status in ["replied", "won", "lost", "do_not_contact", "call_booked", "bounced"]:
                     continue
 
         emails_to = sent_df[sent_df["to_email"] == to_email].sort_values("sent_at")
+
+        # Skip if part of a campaign (handled by _run_campaigns)
+        if len(emails_to) > 0 and str(emails_to.iloc[0].get("campaign_id", "")).strip():
+            continue
+
         if len(emails_to) >= 4:
             continue
         last = emails_to.iloc[-1]
@@ -247,6 +338,7 @@ def _send_new_outreach(settings):
     ]
 
     if "lead_score" in unsent.columns:
+        unsent = unsent.copy()
         unsent["lead_score"] = pd.to_numeric(unsent["lead_score"], errors="coerce")
         unsent = unsent.sort_values("lead_score", ascending=False)
 
@@ -257,6 +349,17 @@ def _send_new_outreach(settings):
 
     for idx, lead in unsent.head(max_emails).iterrows():
         to_email = str(lead["email"])
+
+        # Check compliance
+        try:
+            from core.compliance import check_can_send
+            can_send, reason = check_can_send(to_email)
+            if not can_send:
+                print(f"  Skipped {to_email}: {reason}")
+                continue
+        except ImportError:
+            pass
+
         variables = {
             "business_name": str(lead.get("business_name", "")),
             "website": str(lead.get("website", "")),
@@ -291,6 +394,17 @@ def _send_new_outreach(settings):
         time.sleep(random.uniform(30, 60))
 
     print(f"  Sent {sent_count} new emails")
+
+
+def _send_notifications(settings):
+    """Send webhook notifications for daily summary."""
+    try:
+        from automation.webhooks import send_daily_summary
+        send_daily_summary(settings)
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  Notification error: {e}")
 
 
 if __name__ == "__main__":
