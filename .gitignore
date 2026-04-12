@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/
+logs/
+.streamlit/secrets.toml
+*.command
+config.py
+setup_wizard.py
